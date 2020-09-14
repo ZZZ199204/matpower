@@ -150,7 +150,7 @@
 \newcommand{\mpomlink}[0]{\href{\mpomurl}{\mpom{}}}
 \newcommand{\mpomname}[0]{\mpom{}}
 % \newcommand{\mpomname}[0]{{{\bf M}{\sc at}{\bf P}{\sc ower} \textbf{Opt}imization \textbf{Model}}}
-\newcommand{\mpomver}[0]{2.1}
+\newcommand{\mpomver}[0]{2.2-dev}
 \newcommand{\most}[0]{{MOST}}
 \newcommand{\mostname}[0]{{{\bf M}{\sc atpower} \textbf{O}ptimal \textbf{S}cheduling \textbf{T}ool}}
 \newcommand{\mosturl}[0]{https://github.com/MATPOWER/most}
@@ -174,6 +174,7 @@
 \newcommand{\glpk}[0]{{GLPK}}
 \newcommand{\gurobi}[0]{{Gurobi}}
 \newcommand{\mosek}[0]{{MOSEK}}
+\newcommand{\osqp}[0]{{OSQP}}
 \newcommand{\ot}[0]{{Optimization Toolbox}}
 \newcommand{\pardiso}[0]{{PARDISO}}
 \newcommand{\sdppf}[0]{\texttt{SDP\_PF}}
@@ -237,7 +238,7 @@
 %\title{\hl{--- DRAFT  ---}\\\hl{\em do not distribute}\\~\\{\huge \bfseries \mpomname{} User's Manual } \\ ~ \\ \LARGE Version \mpomver{}\\
 \title{{\huge \bfseries \mpomname{} User's Manual } \\ ~ \\ \LARGE Version \mpomver{}}
 \author{Ray~D.~Zimmerman}
-\date{August 25, 2020} % comment this line to display the current date
+%\date{August 25, 2020} % comment this line to display the current date
 %\date{May 8, 2020\thanks{Second revision. First revision was April 29, 2020}} % comment this line to display the current date
 
 %%% BEGIN DOCUMENT
@@ -420,17 +421,17 @@ Elapsed time 3.29 seconds.
 \subsection{Sample Usage}
 \label{sec:usage}
 
-Suppose we have the following constrained 4-dimensional quadratic programming (QP) problem\footnote{Based on the one from  \url{https://v8doc.sas.com/sashtml/iml/chap8/sect12.htm}.} with two 2-dimensional variables, $y$ and $z$, and two constraints, one equality and the other inequality, along with lower bounds on all of the variables.
+Suppose we have the following constrained 4-dimensional quadratic programming (QP) problem with two 2-dimensional variables, $y$ and $z$, and two constraints, one equality and the other inequality, along with lower bounds on all of the variables.
 
 \begin{equation}
 \min_{y, z} \frac{1}{2} \left[\begin{array}{cc}\trans{y} & \trans{z} \end{array}\right] Q \left[\begin{array}{c}y \\ z \end{array}\right]
 \end{equation}
 subject to
 \begin{align}
- &A_1 \left[\begin{array}{c}y \\ z \end{array}\right] = b_1 \\
-l_2 \le &A_2 \left[\begin{array}{c}y \\ z \end{array}\right] \\
-y_\mathrm{min} \le &y \\
-z_\mathrm{min} \le &z
+A_1 \left[\begin{array}{c}y \\ z \end{array}\right] &= b_1 \\
+A_2 y &\le u_2 \\
+y &\ge y_\mathrm{min} \\
+z &\le z_\mathrm{max}
 \end{align}
 
 And suppose the data for the problem is provided as follows.
@@ -442,17 +443,17 @@ z0 = [0; 1];
 
 %% variable lower bounds
 ymin = [0; 0];
-zmin = [0; 0];
+zmax = [0; 2];
 
 %% constraint data
-A1 = [ 1 1 1 1 ];               b1 = 1;
-A2 = [ 0.17 0.11 0.10 0.18 ];   l2 = 0.1;
+A1 = [ 6 1 5 -4 ];  b1 = 4;
+A2 = [ 4 9 ];       u2 = 2;
 
 %% quadratic cost coefficients
-Q = [   1003.1 4.3 6.3 5.9;
-        4.3 2.2 2.1 3.9;
-        6.3 2.1 3.5 4.8;
-        5.9 3.9 4.8 10  ];
+Q = [ 8  1 -3 -4;
+      1  4 -2 -1;
+     -3 -2  5  4;
+     -4 -1  4  12  ];
 \end{Code}
 
 Below, we will show two approaches to construct and solve the problem. The first method, based on the the Optimization Model class \code{opt\_model}, allows you to add variables, constraints and costs to the model individually. Then \code{opt\_model} automatically assembles and solves the full model automatically.
@@ -462,10 +463,10 @@ Below, we will show two approaches to construct and solve the problem. The first
 %% build model
 om = opt_model;
 om.add_var('y', 2, y0, ymin);
-om.add_var('z', 2, z0, zmin);
-om.add_lin_constraint('lincon1', A1, b1, b1, {'y', 'z'});
-om.add_lin_constraint('lincon2', A2, l2, [], {'y', 'z'});
-om.add_quad_cost('cost', Q, [], [], {'y', 'z'});
+om.add_var('z', 2, z0, [], zmax);
+om.add_lin_constraint('lincon1', A1, b1, b1);
+om.add_lin_constraint('lincon2', A2, [], u2, {'y'});
+om.add_quad_cost('cost', Q, []);
 
 %% solve model
 [x, f, exitflag, output, lambda] = om.solve();
@@ -476,39 +477,36 @@ The second method requires you to construct the parameters for the full problem 
 \begin{Code}
 %%-----  METHOD 2  -----
 %% assemble model parameters manually
-xmin = [ymin; zmin];
+xmin = [ymin; -Inf(2,1)];
+xmax = [ Inf(2,1); zmax];
 x0 = [y0; z0];
-A = [ A1; A2 ];
-l = [ b1; l2 ];
-u = [ b1; Inf ];
+A = [ A1; A2 0 0];
+l = [ b1; -Inf ];
+u = [ b1;  u2  ];
 
 %% solve model
-[x, f, exitflag, output, lambda] = qps_master(Q, [], A, l, u, xmin, [], x0);
+[x, f, exitflag, output, lambda] = qps_master(Q, [], A, l, u, xmin, xmax, x0);
 \end{Code}
 
 The above examples are included in \mpompath{lib/t/qp\_ex1.m} along with some commands to print the results, yielding the output below for each approach:
 
 \begin{Code}
-f = 1.09667   exitflag = 1
+f = 1.875      exitflag = 1
 
-x = 
-   0.0000
-   0.9333
-   0.0667
-   0.0000
+             var bound shadow prices
+     x     lambda.lower  lambda.upper
+  0.5000      0.0000        0.0000
+  0.0000      5.1250        0.0000
+ -0.0000      0.0000        8.7500
+ -0.2500      0.0000        0.0000
 
-lambda.lower (var bound shadow price) =
-   2.2400
-   0.0000
-   0.0000
-   1.7667
-
-lambda.mu_l (constraint shadow price) =
-   2.1933
-   0.0000
+constraint shadow prices
+lambda.mu_l  lambda.mu_u
+  1.2500       0.0000
+  0.0000       0.6250
 \end{Code}
 
-Both approaches can be applied to each of the types of problems that \mpom{} handles, namely, LP, QP, MILP, MIQP, NLP and nonlinear equations.
+Both approaches can be applied to each of the types of problems that \mpom{} handles, namely, LP, QP, MILP, MIQP, NLP and linear and nonlinear equations.
 
 An options struct can be passed to the \code{solve} method or the \code{qps\_master} function to select a specific solver, control the level of
 progress output, or modify a solver's default parameters.
@@ -533,6 +531,7 @@ The first part consists of interfaces to various numerical optimization solvers 
 \item linear (LP) and quadratic (QP) programming problems
 \item mixed-integer linear (MILP) and quadratic (MIQP) programming problems
 \item nonlinear programming problems (NLP)
+\item linear equations (LEQ)
 \item nonlinear equations (NLEQ)
 \end{itemize}
 
@@ -592,7 +591,6 @@ name & description \\
 \code{xmin}	& column vector $x_\mathrm{min}$ of lower bounds on $x$, defaults to $-\infty$	\\
 \code{xmax}	& 	column vector $x_\mathrm{max}$ of upper bounds on $x$, defaults to $+\infty$	\\
 \code{x0}	& optional starting value of optimization vector $x$ \emph{(ignored by some solvers)}	\\
-\code{opt}	& optional options struct, all fields (shown in Table~\ref{tab:qps_master_options}) optional	\\
 \code{opt}	& optional options struct (all fields optional), see Table~\ref{tab:qps_master_options} for details	\\
 \code{problem}	& alternative, single argument input struct with fields corresponding to arguments above	\\
 \bottomrule
@@ -664,7 +662,7 @@ name & default & description \\
 \codeq{GLPK} & \glpk{}\tnote{*} \emph{(LP only)} \\
 \codeq{GUROBI} & \gurobi{}\tnote{*} \\
 \codeq{IPOPT} & \ipopt{}\tnote{*} \\
-\codeq{MIPS} & \mips{}, \mipsname{}, primal/dual interior point method \\
+\codeq{MIPS} & \mipslink{}, \mipsname{} \\
 \codeq{MOSEK} & \mosek{}\tnote{*} \\
 \codeq{OT} & \matlab{} Opt Toolbox, \code{quadprog}, \code{linprog} \\
 \end{tabular}	\\
@@ -841,7 +839,7 @@ name & default & description \\
 3 & print all progress info \\
 \end{tabular}	\\
 \code{skip\_prices}	& 0	& flag that specifies whether or not to skip the price computation stage, in which the problem is re-solved for only the continuous variables, with all others being constrained to their solved values \\
-\code{price\_stage\_warn\_tol}	& \emph{$10^-7$}	& tolerance on the objective function value and primal variable relative mismatch required to avoid mismatch warning message \\
+\code{price\_stage\_warn\_tol}	& \emph{$10^{-7}$}	& tolerance on the objective function value and primal variable relative mismatch required to avoid mismatch warning message \\
 \code{cplex\_opt}	& \emph{empty}	& options struct for \cplex{}\tnote{*} \\
 \code{glpk\_opt}	& \emph{empty}	& options struct for \glpk{}\tnote{*} \\
 \code{grb\_opt}	& \emph{empty}	& options struct for \gurobi{}\tnote{*} \\
@@ -919,19 +917,19 @@ The calling syntax for \code{nlps\_master} is nearly identical to that of \mipsl
 \toprule
 name & description \\
 \midrule
-\code{f\_fcn}	& Handle to a function that evaluates the objective function, its gradients and Hessian\tnote{\ddag} for a given value of $x$. Calling syntax for this function:	\\
+\code{f\_fcn}	& handle to function that evaluates the objective function, its gradients and Hessian\tnote{\ddag} for a given value of $x$, with calling syntax:	\\
 &~~~~\code{[f, df, d2f] = f\_fcn(x)}	\\
-\code{x0}	& Starting value of optimization vector $x$.	\\
-\code{A}, \code{l}, \code{u}	& Define the optional linear constraints $l \le A x \le u$. Default values for the elements of \code{l} and \code{u} are \code{-Inf} and \code{Inf}, respectively.	\\
-\code{xmin}, \code{xmax}	& Optional lower and upper bounds on the $x$ variables, defaults are \code{-Inf} and \code{Inf}, respectively.	\\
-\code{gh\_fcn}	& Handle to function that evaluates the optional nonlinear constraints and their gradients for a given value of $x$. Calling syntax for this function is:	\\
+\code{x0}	& starting value of optimization vector $x$	\\
+\code{A}, \code{l}, \code{u}	& define optional linear constraints $l \le A x \le u$, where default values for elements of \code{l} and \code{u} are \code{-Inf} and \code{Inf}, respectively.	\\
+\code{xmin}, \code{xmax}	& optional lower and upper bounds on $x$, with defaults \code{-Inf} and \code{Inf}, respectively	\\
+\code{gh\_fcn}	& handle to function that evaluates the optional nonlinear constraints and their gradients for a given value of $x$, with calling syntax:	\\
 &~~~~\code{[h, g, dh, dg] = gh\_fcn(x)}	\\
-& where the columns of \code{dh} and \code{dg} are the gradients of the corresponding elements of \code{h} and \code{g}, i.e. \code{dh} and \code{dg} are transposes of the Jacobians of \code{h} and \code{g}, respectively.	\\
-\code{hess\_fcn}	& Handle to function that computes the Hessian\tnote{\ddag} of the Lagrangian for given values of $x$, $\lambda$ and $\mu$, where $\lambda$ and $\mu$ are the multipliers on the equality and inequality constraints, $g$ and $h$, respectively. The calling syntax for this function is:	\\
+& where the columns of \code{dh} and \code{dg} are the gradients of the corresponding elements of \code{h} and \code{g}, i.e. \code{dh} and \code{dg} are transposes of the Jacobians of \code{h} and \code{g}, respectively	\\
+\code{hess\_fcn}	& handle to function that computes the Hessian\tnote{\ddag} of the Lagrangian for given values of $x$, $\lambda$ and $\mu$, where $\lambda$ and $\mu$ are the multipliers on the equality and inequality constraints, $g$ and $h$, respectively, with calling syntax:	\\
 &~~~~\code{Lxx = hess\_fcn(x, lam, cost\_mult)},	\\
 &where $\lambda$ = \code{lam.eqnonlin}, $\mu$ = \code{lam.ineqnonlin} and \code{cost\_mult} is a parameter used to scale the objective function	\\
-\code{opt}	& Optional options structure with fields, all of which are also optional, described in Table~\ref{tab:nlps_master_options}. \\
-\code{problem}	& Alternative, single argument input struct with fields corresponding to arguments above.	\\
+\code{opt}	& optional options struct (all fields optional), see Table~\ref{tab:nlps_master_options} for details	\\
+\code{problem}	& alternative, single argument input struct with fields corresponding to arguments above	\\
 \bottomrule
 \end{tabular}
 \begin{tablenotes}
@@ -994,7 +992,7 @@ name & default & description \\
 \code{alg}	& \codeq{DEFAULT}	& determines which solver to use \\
 && \begin{tabular}{c @{ -- } p{0.5\textwidth}}
 \codeq{DEFAULT} & automatic, current default is \mips{} \\
-\codeq{MIPS} & \mips{} \\
+\codeq{MIPS} & \mipslink{}, \mipsname{} \\
 \codeq{FMINCON} & \matlab{} Opt Toolbox, \code{fmincon}\tnote{*} \\
 \codeq{IPOPT} & \ipopt{}\tnote{*} \\
 \codeq{KNITRO} & \knitro{}\tnote{*} \\
@@ -1225,13 +1223,13 @@ The calling syntax for \code{nleqs\_master} is identical to that used by \code{f
 \toprule
 name & description \\
 \midrule
-\code{fcn}	& Handle to a function that evaluates the function $f(x)$ and optionally its Jacobian $J(x)$ for a given value of $x$. Calling syntax for this function is:	\\
+\code{fcn}	& handle to function that evaluates the function $f(x)$ and optionally its Jacobian $J(x)$ for a given value of $x$, with calling syntax:	\\
 &~~~~\code{f = fcn(x)}, or	\\
 &~~~~\code{[f, J] = fcn(x)}	\\
-& Whether \code{fcn} is required to return the Jacobian or not depends on the selected solver algorithm. \\
-\code{x0}	& Starting value of vector $x$.	\\
-\code{opt}\tnote{\dag}	& Options structure with fields, all of which are also optional, described in Table~\ref{tab:nleqs_master_options}. \\
-\code{problem}	& Alternative, single argument input struct with fields corresponding to arguments above.	\\
+& where selected solver algorithm determines whether \code{fcn} is required to return the Jacobian or not \\
+\code{x0}	& starting value of vector $x$	\\
+\code{opt}	& optional options struct (all fields optional), see Table~\ref{tab:nleqs_master_options} for details	\\
+\code{problem}	& alternative, single argument input struct with fields corresponding to arguments above	\\
 \bottomrule
 \end{tabular}
 \begin{tablenotes}
@@ -1312,7 +1310,7 @@ name & default & description \\
 \end{tabular}
 \begin{tablenotes}
  \scriptsize
- \item [*] {The \code{fsolve()} function is included with GNU Octave, but on \matlab{} it is part of the \matlab{} \ot{}. See Appendix~\ref{app:optional_packages} for more information on the \matlab{} \ot{}.}
+ \item [*] {The \code{fsolve} function is included with GNU Octave, but on \matlab{} it is part of the \matlab{} \ot{}. See Appendix~\ref{app:optional_packages} for more information on the \matlab{} \ot{}.}
  \item [\dag] {Fast-decoupled Newton requires setting \code{fd\_opt.jac\_approx\_fcn} to a function handle that returns Jacobian approximations. See \code{help nleqs\_fd\_newton} for more details.}
  \item [\ddag] {Gauss-Seidel requires setting \code{gs\_opt.x\_update\_fcn} to a function handle that updates $x$. See \code{help nleqs\_gauss\_seidel} for more details.}
  \item [\S] {A value of 0 indicates to use the solver's own default.}
@@ -1832,13 +1830,121 @@ See Section~\ref{sec:indexed_sets} for details on indexed named sets and the \co
 \label{sec:solve}
 
 \begin{Code}
-[x, f, exitflag, output, lambda] = om.solve()
+om.solve()
+[x, f, exitflag, output, jac] = om.solve()
 [x, f, exitflag, output, lambda] = om.solve(opt)
+[...] = om.solve(opt)
 \end{Code}
 
 After all variables, constraints and costs have been added to the model, the optimization problem can be solved simply by calling the \code{solve} method. This method automatically selects and calls, depending on the problem type, \code{mplinsolve} or one of the master solver interface functions from Section~\ref{sec:master_solvers}, namely \code{qps\_master}, \code{miqps\_master}, \code{nlps\_master}, or \code{nleqs\_master}. Note that one of the equation solvers, \code{mplinsolve} or \code{nleqs\_master} is chosen if the model has only equality constraints, with no costs and no inequality constraints.
 
-For details on the return values and the input options struct \code{opt}, see the descriptions of the individual solver functions in Sections~\ref{sec:qps_master}, \ref{sec:miqps_master}, \ref{sec:nlps_master}, and \ref{sec:nleqs_master}. For linear equations, the \code{solver} and \code{opt} arguments for \code{mplinsolve}, described in Section~\ref{MIPSMAN-sec:mplinsolve} of the \mipsman{}, can be provided in \code{opt.leq\_opt.solver} and \code{opt.leq\_opt.opt}, respectively.
+The results are stored in the \code{soln} field (see Section~\ref{sec:soln}) of the \mpom{} object and can be returned in the optional output arguments. The input options struct \code{opt}, summarized in Tables~\ref{tab:solve_options} and \ref{tab:solve_alg_option}, is optional, as are all of its fields. For details on the return values see the descriptions of the individual solver functions in Sections~\ref{sec:qps_master}, \ref{sec:miqps_master}, \ref{sec:nlps_master}, and \ref{sec:nleqs_master}. For linear equations, the \code{solver} and \code{opt} arguments for \code{mplinsolve}, described in Section~\ref{MIPSMAN-sec:mplinsolve} of the \mipsman{}, can be provided in the respective fields of \code{opt.leq\_opt}.
+
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Options for \code{solve}}
+\label{tab:solve_options}
+\footnotesize
+\begin{tabular}{lcp{0.62\textwidth}}
+\toprule
+name & default & description \\
+\midrule
+\code{alg}	& \codeq{DEFAULT}	& determines which solver to use, see Table~\ref{tab:solve_alg_option} \\
+\code{verbose}	& 1	& amount of progress info to be printed \\
+&& \begin{tabular}{r @{ -- } l}
+0 & print no progress info \\
+1 & print a little progress info \\
+2 & print a lot of progress info \\
+3 & print all progress info \\
+\end{tabular}	\\
+\code{bp\_opt}	& \emph{empty}	& options vector for \code{bp} (BPMPD)\tnote{*} \\
+\code{clp\_opt}	& \emph{empty}	& options vector for \clp{}\tnote{*} \\
+\code{cplex\_opt}	& \emph{empty}	& options struct for \cplex{}\tnote{*} \\
+\code{fd\_opt}	& \emph{empty}	& options struct for fast-decoupled Newton's method, \code{nleqs\_fd\_newton}\tnote{\dag} \\
+\code{fmincon\_opt}	& \emph{empty}	& options struct for \code{fmincon}\tnote{*} \\
+\code{fsolve\_opt}	& \emph{empty}	& options struct for \code{fsolve}\tnote{\S} \\
+\code{glpk\_opt}	& \emph{empty}	& options struct for \glpk{}\tnote{*} \\
+\code{grb\_opt}	& \emph{empty}	& options struct for \gurobi{}\tnote{*} \\
+\code{gs\_opt}	& \emph{empty}	& options struct for Gauss-Seidel method, \code{nleqs\_gauss\_seidel}\tnote{\ddag} \\
+\code{intlinprog\_opt}	& \emph{empty}	& options struct for \code{intlinprog}\tnote{*} \\
+\code{ipopt\_opt}	& \emph{empty}	& options struct for \ipopt{}\tnote{*} \\
+\code{knitro\_opt}	& \emph{empty}	& options struct for \knitro{}\tnote{*} \\
+\code{leq\_opt}	& \emph{empty}	& options struct for \code{mplinsolve}, with \code{solver} and \code{opt} fields corresponding to respective \code{mplinsolve} args \\
+\code{linprog\_opt}	& \emph{empty}	& options struct for \code{linprog}\tnote{*} \\
+\code{mips\_opt}	& \emph{empty}	& options struct for \mips{} \\
+\code{mosek\_opt}	& \emph{empty}	& options struct for \mosek{}\tnote{*} \\
+\code{newton\_opt}	& \emph{empty}	& options struct for Newton's method, \code{nleqs\_newton} \\
+\code{osqp\_opt}	& \emph{empty}	& options struct for \osqp{}\tnote{*} \\
+\code{quadprog\_opt}	& \emph{empty}	& options struct for \code{quadprog}\tnote{*} \\
+\code{parse\_soln}	& 0	& flag that specifies whether or not to call the \code{parse\_soln} method and place the return values in \code{om.soln}	\\
+\code{price\_stage\_warn\_tol}	& \emph{$10^{-7}$}	& tolerance on the objective function value and primal variable relative mismatch required to avoid mismatch warning message \\
+\code{skip\_prices}	& 0	& flag that specifies whether or not to skip the price computation stage, in which the problem is re-solved for only the continuous variables, with all others being constrained to their solved values \\
+\code{x0}	& \emph{empty}	& optional initial value of $x$, overrides value stored in model, \emph{(ignored by some solvers)}	\\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+ \scriptsize
+ \item [*] {Requires the installation of an optional package. See Appendix~\ref{app:optional_packages} for details on the corresponding package.}
+ \item [\dag] {Fast-decoupled Newton requires setting \code{fd\_opt.jac\_approx\_fcn} to a function handle that returns Jacobian approximations. See \code{help nleqs\_fd\_newton} for more details.}
+ \item [\ddag] {Gauss-Seidel requires setting \code{gs\_opt.x\_update\_fcn} to a function handle that updates $x$. See \code{help nleqs\_gauss\_seidel} for more details.}
+ \item [\S] {The \code{fsolve} function is included with GNU Octave, but on \matlab{} it is part of the \matlab{} \ot{}. See Appendix~\ref{app:optional_packages} for more information on the \matlab{} \ot{}.}
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+\clearpage
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Values for \code{alg} Option to \code{solve}}
+\label{tab:solve_alg_option}
+\footnotesize
+\begin{tabular}{lcp{0.62\textwidth}}
+\toprule
+\code{alg} value & problem type(s) & description \\
+\midrule
+\codeq{DEFAULT} & \emph{all} & automatic, depends on problem type, uses first available of: \\
+& LP & \gurobi{}, \cplex{}, \mosek{}, \code{linprog},\tnote{\P}, \glpk{}, BPMPD, \mips{} \\
+& QP & \gurobi{}, \cplex{}, \mosek{}, \code{quadprog}\tnote{\P}, BPMPD, \mips{} \\
+& MILP & \gurobi{}, \cplex{}, \mosek{}, \code{intlinprog}, \glpk{} \\
+& MIQP & \gurobi{}, \cplex{}, \mosek{} \\
+& NLP & \mips{} \\
+& MINLP & \knitro{} (not yet implemented) \\
+& NLEQ & Newton's method \\
+\codeq{BPMPD} & LP, QP & BPMPD\tnote{*} \\
+\codeq{CLP} & LP, QP & \clp{}\tnote{*} \\
+\codeq{CPLEX} & LP, QP, MILP, MIQP & \cplex{}\tnote{*} \\
+\codeq{FD} & NLEQ & fast-decoupled Newton's method\tnote{\dag} \\
+\codeq{FMINCON} & NLP & \matlab{} Opt Toolbox, \code{fmincon}\tnote{*} \\
+\codeq{FSOLVE} & NLEQ & \matlab{} Opt Toolbox, \code{fsolve}\tnote{\S} \\
+\codeq{GLPK} & LP, MILP & \glpk{}\tnote{*} \emph{(LP only)} \\
+\codeq{GS} & NLEQ & Gauss-Seidel method\tnote{\ddag} \\
+\codeq{GUROBI} & LP, QP, MILP, MIQP & \gurobi{}\tnote{*} \\
+\codeq{IPOPT} & LP, QP, NLP & \ipopt{}\tnote{*} \\
+\codeq{KNITRO} & NLP, MINLP & \knitro{}\tnote{*} \\
+\codeq{MIPS} & LP, QP, NLP & \mipslink{}, \mipsname{} \\
+\codeq{MOSEK} & LP, QP, MILP, MIQP & \mosek{}\tnote{*} \\
+\codeq{NEWTON} & NLEQ & Newton's method \\
+\codeq{OSQP} & LP, QP & \osqp{}\tnote{*} \\
+\codeq{OT} & LP, QP, MILP & \matlab{} Opt Toolbox, \code{quadprog}, \code{linprog}, \code{intlinprog} \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+ \scriptsize
+ \item [*] {Requires the installation of an optional package. See Appendix~\ref{app:optional_packages} for details on the corresponding package.}
+ \item [\dag] {Fast-decoupled Newton requires setting \code{fd\_opt.jac\_approx\_fcn} to a function handle that returns Jacobian approximations. See \code{help nleqs\_fd\_newton} for more details.}
+ \item [\ddag] {Gauss-Seidel requires setting \code{gs\_opt.x\_update\_fcn} to a function handle that updates $x$. See \code{help nleqs\_gauss\_seidel} for more details.}
+ \item [\S] {The \code{fsolve} function is included with GNU Octave, but on \matlab{} it is part of the \matlab{} \ot{}. See Appendix~\ref{app:optional_packages} for more information on the \matlab{} \ot{}.}
+ \item [\P] {If running on \matlab{}.}
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
 
 \subsection{Accessing the Model}
 
@@ -2155,6 +2261,204 @@ The \code{eval\_nln\_cost} method evaluates the cost function and its derivative
 
 See Section~\ref{sec:indexed_sets} for details on indexed named sets and the \code{idx\_list} argument.
 
+\subsubsection{Model Solution}
+\label{sec:soln}
+The solved results of a model, as returned by the \code{solve} method, are stored in the \code{soln} field of the \mpom{} object as summarized in Table~\ref{tab:soln}.
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Model Solution}
+\label{tab:soln}
+\footnotesize
+\begin{tabular}{lp{0.82\textwidth}}
+\toprule
+field & description \\
+\midrule
+\code{om} & \mpom{} object	\\
+\code{~~.soln} & model solution struct	\\
+\code{~~~~.x} & solution vector	\\
+\code{~~~~.f} & final function value\tnote{*}, $f(x)$ 	\\
+\code{~~~~.eflag} & exit flag	\\
+& \begin{tabular}{r @{ -- } l}
+1 & converged successfully \\
+$\le 0$ & solver-specific failure code \\
+\end{tabular}	\\
+\code{~~~~.output} & output struct with the following fields:	\\
+& \begin{tabular}{r @{ -- } l}
+alg & algorithm code of solver used \\
+\emph{(others)} & solver-specific fields \\
+\end{tabular}	\\
+\code{~~~~.jac} & final value of Jacobian matrix (for LEQ/NLEQ)	\\
+\code{~~~~.lambda} & shadow prices on constraints	\\
+\code{~~~~~~.lower} & variable lower bound	\\
+\code{~~~~~~.upper} & variable upper bound	\\
+\code{~~~~~~.mu\_l} & linear constraint lower bound	\\
+\code{~~~~~~.mu\_u} & linear constraint upper bound	\\
+\code{~~~~~~.eqnonlin} & nonlinear equality constraints	\\
+\code{~~~~~~.ineqnonlin} & nonlinear inequality constraints	\\
+& \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+ \scriptsize
+ \item [*] {Objective function value for optimization problems, constraint function value for sets of equations.}
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+\subsubsection*{\code{get\_soln}}
+\label{sec:get_soln}
+\begin{Code}
+vals = om.get_soln(set_type, name)
+vals = om.get_soln(set_type, name, idx)
+vals = om.get_soln(set_type, tags, name)
+vals = om.get_soln(set_type, tags, name, idx)
+\end{Code}
+
+The \code{get\_soln} method can be used to extract solved results for a given named set of variables, constraints or costs. The input arguments for \code{get\_soln} are summarized in Table~\ref{tab:get_soln} and Table~\ref{tab:get_soln_tags}. The variable number of output arguments correspond to the \code{tags} input. If \code{tags} is empty or not specified, the calling context will define the number of outputs, returned in order of default tags for the specified \code{set\_type}.
+
+\subsubsection*{Examples:}
+
+Value of variable named \codeq{P} and shadow prices on its bounds.
+\begin{Code}
+[P, muPmin, muPmax] = om.get_soln('var', 'P');
+\end{Code}
+
+\noindent Shadow prices on upper and lower linear constraint set named \codeq{lin\_con\_1}.
+\begin{Code}
+[mu_u, mu_l] = om.get_soln('lin', {'mu_u', 'mu_l'}, 'lin_con_1');
+\end{Code}
+
+\noindent Jacobian of the (2,3)-element of the indexed nonlinear equality constraint set named \codeq{nle\_con\_b}.
+\begin{Code}
+dg_b_2_3 = om.get_soln('nle', 'dg', 'nle_con_b', {2,3});
+\end{Code}
+
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Inputs for \code{get\_soln}}
+\label{tab:get_soln}
+\footnotesize
+\begin{tabular}{lcp{0.7\textwidth}}
+\toprule
+name & default & description \\
+\midrule
+\code{set\_type}	& \emph{required}	& one of the following, specifying the type of set \\
+&& \begin{tabular}{c @{ -- } p{0.5\textwidth}}
+\codeq{var} & variables \\
+\codeq{lin} & linear constraints \\
+\codeq{nle} & nonlinear equality constraints \\
+\codeq{nli} & nonlinear inequality constraints \\
+\codeq{nlc} & nonlinear costs \\
+\codeq{qdc} & quadratic costs \\
+\end{tabular}	\\
+\code{tags}	& \emph{depends}	& char array or cell array of char arrays specifying the desired output(s)\tnote{\dag} \\
+\code{name}	& \emph{required}	& char array specifying the name of the set \\
+\code{idx}	& \emph{empty}	& cell array specifying the indices of the set \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+ \scriptsize
+ \item [\dag] {Valid values and defaults for \code{tags} depend on \code{set\_type}. See Table~\ref{tab:get_soln_tags} for details.}
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Values of \code{tags} input to \code{get\_soln}}
+\label{tab:get_soln_tags}
+\footnotesize
+\begin{tabular}{lcp{0.58\textwidth}}
+\toprule
+set type & valid tag values & description \\
+\midrule
+\codeq{var} && default \code{tags} = \{\codeq{x}, \codeq{mu\_l}, \codeq{mu\_u}\} \\
+&\codeq{x} & value of solution variable \\
+&\codeq{mu\_l} & shadow price on variable lower bound \\
+&\codeq{mu\_u} & shadow price on variable upper bound \\
+\codeq{lin} && default \code{tags} =  \{\codeq{f}\} for LEQ problems, \{\codeq{g}, \codeq{mu\_l}, \codeq{mu\_u}\} otherwise \\
+&\codeq{f}\tnote{\dag} & equality constraint values, $Ax - u$ \\
+&\codeq{g} & $1 \times 2$ cell array of upper and lower constraint values, \\
+&&\{$Ax - u$, $l - Ax$\} \\
+&\codeq{Ax\_u} & upper constraint value, $Ax - u$ \\
+&\codeq{l\_Ax} & lower constraint value, $l - Ax$ \\
+&\codeq{mu\_l} & shadow price on constraint lower bound \\
+&\codeq{mu\_u} & shadow price on constraint upper bound \\
+\codeq{nle} && default \code{tags} =  \{\codeq{g}, \codeq{lam}, \codeq{dg}\} \\
+&\codeq{g} & constraint value, $g(x)$ \\
+&\codeq{lam} & shadow price on constraint \\
+&\codeq{dg} & Jacobian of constraint \\
+\codeq{nli} && default \code{tags} =  \{\codeq{h}, \codeq{mu}, \codeq{dh}\} \\
+&\codeq{h} & constraint value, $h(x)$ \\
+&\codeq{mu} & shadow price on constraint \\
+&\codeq{dh} & Jacobian of constraint \\
+\codeq{nlc} or \codeq{qdc} && default \code{tags} =  \{\codeq{f}, \codeq{df}, \codeq{d2f}\} \\
+&\codeq{f} & cost function value, $f(x)$\tnote{\ddag} \\
+&\codeq{df} & gradient of cost function \\
+&\codeq{d2f} & Hession of cost function \\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+ \scriptsize
+ \item [\dag] {For LEQ problems only.}
+ \item [\ddag] {For \codeq{qdc}, $f(x)$ can return be a vector.}
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+\clearpage
+\subsubsection*{\code{parse\_soln}}
+\label{sec:parse_soln}
+\begin{Code}
+ps = om.parse_soln()
+\end{Code}
+
+The \code{parse\_soln} method returns a struct of parsed solution vector and shadow price values for each named set of variables and constraints. The returned \code{ps} (parsed solution) struct has the format shown in Table~\ref{tab:parse_soln}, where each of the terminal elements is a struct with fields corresponding to the respective named sets.
+
+\begin{table}[!ht]
+%\renewcommand{\arraystretch}{1.2}
+\centering
+\begin{threeparttable}
+\caption{Output of \code{parse\_soln}}
+\label{tab:parse_soln}
+\footnotesize
+\begin{tabular}{ll}
+\toprule
+fields & description \\
+\midrule
+\code{ps} \\
+\code{~~~.var} & variables \\
+\code{~~~~~~.val} & struct of solution vectors \\
+\code{~~~~~~.mu\_l} & struct of lower bound shadow prices \\
+\code{~~~~~~.mu\_u} & struct of upper bound shadow prices \\
+\code{~~~.lin} & linear constraints \\
+\code{~~~~~~.mu\_l} & struct of lower bound shadow prices \\
+\code{~~~~~~.mu\_u} & struct of upper bound shadow prices \\
+\code{~~~.nle} & nonlinear equality constraints \\
+\code{~~~~~~.lam} & struct of shadow prices \\
+\code{~~~.nli} & nonlinear inequality constraints \\
+\code{~~~~~~.mu} & struct of shadow prices \\
+\bottomrule
+\end{tabular}
+% \begin{tablenotes}
+%  \scriptsize
+%  \item [\dag] {Footnote.}
+% \end{tablenotes}
+\end{threeparttable}
+\end{table}
+
+The value of each element in the returned struct can be obtained
+via the \code{get\_soln} method as well, but \code{parse\_soln} is generally more efficient if a complete set of values is needed.
+
+\clearpage
 \subsection{Indexed Sets}
 \label{sec:indexed_sets}
 
@@ -2241,6 +2545,7 @@ Returns 1 if any of the variables are binary or integer, 0 otherwise.
 \subsubsection*{\code{problem\_type}}
 \begin{Code}
 prob_type = om.problem_type()
+prob_type = om.problem_type(recheck)
 \end{Code}
 Returns a string identifying the type of mathematical program represented by the current model, based on the variables, costs,and constraints that have been added to the model. Used to automatically select an appropriate solver. 
 
@@ -2258,6 +2563,8 @@ The \code{prob\_type} string is one of the following:
 \item \codeq{MIQP} – mixed-integer quadratic program
 \item \codeq{MINLP} – mixed-integer nonlinear program\footnote{\mpom{} does not yet implement solving MINLP problems.}
 \end{itemize}
+
+The output value is cached for future calls, but calling with a true value for the optional \code{recheck} argument will force it to recheck in case the problem type has changed due to modifying the variables, constraints or costs in the model.
 
 \subsubsection*{\code{varsets\_cell2struct}}
 \begin{Code}
@@ -2405,6 +2712,7 @@ The properties in \code{opt\_model} consist of those inherited from the base cla
 name & description \\
 \midrule
 \code{set\_types}\tnote{\dag}	& struct whose fields define the valid set types\tnote{*}	\\
+\code{prob\_type}	& used to cache return value of \code{problem\_type} method	\\
 \code{var}\tnote{\ddag}	& data for \codeq{var} set type, variables	\\
 \code{lin}\tnote{\ddag}	& data for \codeq{lin} set type, linear constraints	\\
 \code{nle}\tnote{\ddag}	& data for \codeq{nle} set type, nonlinear equality constraints	\\
@@ -2455,6 +2763,7 @@ name & description \\
 \code{~~eval\_quad\_cost}	& evaluates quadratic cost function and its derivatives\tnote{\ddag} for given value of $x$, see Section~\ref{sec:eval_quad_cost}	\\
 \code{~~get}\tnote{\dag}	& access (possibly nested) fields of the object	\\
 \code{~~get\_idx}\tnote{\dag}	& returns index structures for specified set types, see Section~\ref{sec:get_idx}	\\
+\code{~~get\_soln}	& returns named/indexed results for solved model	\\
 \code{~~get\_userdata}\tnote{\dag}	& retreives values of user data stored in the object	\\
 \code{~~getN}\tnote{\dag}	& returns the number of elements of any given set type\tnote{\ddag}	\\
 \code{~~init\_indexed\_name}\tnote{\dag}	& initializes dimensions for a particular indexed named set	\\
@@ -2463,6 +2772,7 @@ name & description \\
 % \code{~~params\_nln\_cost}	& returns parameters for general nonlinear costs\tnote{\ddag}	\\
 \code{~~params\_quad\_cost}	& assembles and returns parameters for quadratic costs\tnote{\ddag}		\\
 \code{~~params\_var}	& assembles and returns inital values, bounds, types for variables\tnote{\ddag}	\\
+\code{~~parse\_soln}	& returns struct of all named solution vectors and shadow prices	\\
 \code{~~problem\_type}	& type of mathematical program represented by current model	\\
 \code{~~solve}	& solves the model, see Section~\ref{sec:solve}	\\
 \code{~~varsets\_cell2struct}	& converts variable subset \code{varsets} from cell array to struct array	\\
@@ -2556,6 +2866,7 @@ tag value & description \\
 \code{~~mosek}	& \mosek{}, LP/QP solver, \url{https://www.mosek.com/}	\\
 \code{~~octave}	& GNU Octave, as opposed to \matlab{}	\\
 \code{~~optimoptions}	& \code{optimoptions}, option setting funciton for \ot{} 6.3+	\\
+\code{~~osqp}	& \osqp{}, {\bf O}perator {\bf S}plitting {\bf Q}uadratic {\bf P}rogram solver, \url{https://osqp.org}	\\
 \code{~~pardiso}	& \pardiso{}, {\bf Par}allel Sparse {\bf D}irect \& {\bf I}terative Linear {\bf So}lver,	\\
 & ~~~~\url{https://pardiso-project.org}	\\
 \code{~~quadprog}	& \code{quadprog}, QP solver from \ot{}	\\
@@ -2585,7 +2896,7 @@ tag value & description \\
 \end{table}
 
 
-
+\clearpage
 \subsection{\tt mpomver}
 \begin{Code}
   mpomver
@@ -2722,6 +3033,7 @@ name & description \\
 \code{qps\_gurobi}	& QP/LP solver API implementation for \gurobi{}\tnote{\dag}	\\
 \code{qps\_ipopt}	& QP/LP solver API implementation for \ipopt{}-based solver\tnote{\dag}	\\
 \code{qps\_mosek}	& QP/LP solver API implementation for \mosek{} (\code{mosekopt})\tnote{\dag}	\\
+\code{qps\_osqp}	& QP/LP solver API implementation for \osqp{}\tnote{\dag}	\\
 \code{qps\_ot}	& QP/LP solver API implementation for \matlab{} Opt Toolbox's \code{quadprog}, \code{linprog}	\\
 \midrule
 \multicolumn{2}{c}{\emph{deprecated functions}} \\
@@ -2755,6 +3067,8 @@ name & description \\
 \code{ipopt\_options}	& default options for \ipopt{} solver\tnote{\dag}	\\
 \code{mosek\_options}	& default options for \mosek{} solver\tnote{\dag}	\\
 \code{mosek\_symbcon}	& symbolic constants to use for \mosek{} solver options\tnote{\dag}	\\
+\code{osqp\_options}	& default options for \osqp{} solver\tnote{\dag}	\\
+\code{osqpver}	& prints version information for \osqp{}	\\
 \bottomrule
 \end{tabular}
 \begin{tablenotes}
@@ -2784,11 +3098,13 @@ name & description \\
 \code{~~add\_quad\_cost}	& adds a named subset of quadratic costs to the model	\\
 \code{~~add\_var}	& adds a named subset of optimization variables to the model	\\
 \code{~~display}	& called to display object when statement not ended with semicolon	\\
-\code{~~eval\_nln\_constraint}	& returns full set of nonlinear equality or inequality constraints and their gradients	\\
+\code{~~eval\_lin\_constraint}	& computes linear constraint values	\\
+\code{~~eval\_nln\_constraint}	& computes nonlinear equality or inequality constraints and their gradients	\\
 \code{~~eval\_nln\_constraint\_hess}	& returns Hessian for full set of nonlinear equality or inequality constraints	\\
 \code{~~eval\_nln\_cost}	& evaluates general nonlinear costs and derivatives	\\
 \code{~~eval\_quad\_cost}	& evaluates quadratic costs and derivatives	\\
 \code{~~get\_idx}	& returns the idx struct for vars, lin/nln constraints, costs	\\
+\code{~~get\_soln}	& returns named/indexed results for solved model	\\
 \code{~~init\_indexed\_name}	& initializes dimensions for indexed named set of costs, constraints or variables	\\
 \code{~~is\_mixed\_integer}	& indicates whether any of the variables are binary or integer 	\\
 \code{~~params\_lin\_constraint}	& returns individual or full set of linear constraint parameters	\\
@@ -2796,6 +3112,7 @@ name & description \\
 \code{~~params\_nln\_cost}	& returns individual general nonlinear cost parameters	\\
 \code{~~params\_quad\_cost}	& returns individual or full set of quadratic cost coefficients	\\
 \code{~~params\_var}	& returns initial values, bounds and variable type for optimimization vector~$\hat{x}$\tnote{\ddag}	\\
+\code{~~parse\_soln}	& returns struct of all named solution vectors and shadow prices	\\
 \code{~~problem\_type}	& indicates type of mathematical program (e.g. LP, QP, MILP, MIQP, or NLP)	\\
 \code{~~solve}	& solves the optimization model	\\
 \code{~~varsets\_cell2struct}\tnote{\dag}	& converts variable set list from cell array to struct array	\\
@@ -2894,14 +3211,14 @@ name & description \\
 \code{~~t\_miqps\_master}	& runs tests of MILP/MIQP solvers via \code{miqps\_master}	\\
 \code{~~t\_nested\_struct\_copy}	& runs tests for \code{nested\_struct\_copy}	\\
 \code{~~t\_nleqs\_master}	& runs tests of NLEQ solvers via \code{nleqs\_master}	\\
-\code{~~t\_nlps\_master}	& runs tests of NLP solvers via\code{nlps\_master}	\\
+\code{~~t\_nlps\_master}	& runs tests of NLP solvers via \code{nlps\_master}	\\
 \code{~~t\_om\_solve\_leqs}	& runs tests of LEQ solvers via \code{om.solve()}	\\
 \code{~~t\_om\_solve\_miqps}	& runs tests of MILP/MIQP solvers via \code{om.solve()}	\\
 \code{~~t\_om\_solve\_nleqs}	& runs tests of NLEQ solvers via \code{om.solve()}	\\
 \code{~~t\_om\_solve\_nlps}	& runs tests of NLP solvers via \code{om.solve()}	\\
 \code{~~t\_om\_solve\_qps}	& runs tests of LP/QP solvers via \code{om.solve()}	\\
 \code{~~t\_opt\_model}	& runs tests for \code{opt\_model} objects	\\
-\code{~~t\_qps\_master}	& runs tests of LP/QP solvers via\code{qps\_master}	\\
+\code{~~t\_qps\_master}	& runs tests of LP/QP solvers via \code{qps\_master}	\\
 \bottomrule
 \end{tabular}
 % \begin{tablenotes}
@@ -3009,6 +3326,15 @@ Each solver implements a number of different solution algorithms.
 More information is available from The MathWorks, Inc. at \url{https://www.mathworks.com/}.
 
 When available, the \ot{} solvers can be used to solve general LP and QP problems via \mpom{}'s common QP solver interface \code{qps\_master}, or MILP problems via \code{miqps\_master}, with the algorithm option set to \codeq{OT}, or by calling \code{qps\_ot} or \code{miqps\_ot} directly. It can be to solve general NLP problems via \mpom{}'s common NLP solver interface \code{nlps\_master} with the algorithm option set to \codeq{FMINCON}, or by calling \code{nlps\_fmincon} directly. It can also be used to solve general NLEQ problems via \mpom{}'s common NLEQ solver interface \code{nleqs\_master} with the algorithm option set to \codeq{FSOLVE}, or by calling \code{nleqs\_fsolve} directly.
+
+\subsection{\osqp{} -- Operator Splitting Quadratic Program Solver}
+\label{app:osqp}
+
+\osqp{}~\cite{osqp} is a numerical optimization package for solving convex quadratic programming problems. It uses a custom ADMM-based first-order method requiring only a single matrix factorization in the setup phase. More information is available at \url{https://osqp.org}.
+
+\osqp{} is a free, open-source package distributed under the Apache 2.0 License.
+
+When the \matlab{} interface to \osqp{} is installed, it can be used to solve general LP and QP problems via \mpom{}'s common QP solver interface \code{qps\_master} with the algorithm option set to \codeq{OSQP}, or by calling \code{qps\_osqp} directly.
 
 
 %%------------------------------------------
@@ -3155,15 +3481,36 @@ The \href{https://matpower.org/docs/MP-Opt-Model-manual-2.1.pdf}{\mpom{} 2.1 Use
     \end{itemize}
 \end{itemize}
 
-% \subsubsection*{Bugs Fixed}
-% \begin{itemize}
-% \item 
-%     \emph{Thanks to Fulano.}
-% \end{itemize}
-
 \subsubsection*{Incompatible Changes}
 \begin{itemize}
 \item In \code{output} return value from \code{nleqs\_newton()}, changed the \code{normF} field of \code{output.hist} to \code{normf}, for consistency in using lowercase \code{f} everywhere.
+\end{itemize}
+
+
+\clearpage
+\subsection{Version 2.2 -- released ??? ?, 202?}
+\label{app:v22}
+
+The \href{https://matpower.org/docs/MP-Opt-Model-manual-2.2.pdf}{\mpom{} 2.2 User's Manual} is available online.\footnote{\url{https://matpower.org/docs/MP-Opt-Model-manual-2.2.pdf}}
+
+\subsubsection*{New Features}
+\begin{itemize}
+\item Support for \osqp{} solver from \url{https://osqp.org}.
+\item Save the results of the \code{solve()} method to the \code{soln} field of the \mpom{} object.
+\item New functions:
+    \begin{itemize}
+    \item \code{opt\_model/get\_soln()} method extracts solved results for a given named set of variables, constraints or costs.
+    \item \code{opt\_model/parse\_soln()} method returns a complete set of solution vector and shadow price values for a solved model.
+    \item \code{opt\_model/eval\_lin\_constraint()} method computes the constraint values for the full set or an individual named subset of linear constraints.
+    \item \code{qps\_osqp()} provides standardized interface for using \osqp{} to solve LP/QP problems
+    \item \code{osqp\_options()} initializes options for \osqp{} solver
+    \item \code{osqpver()} returns/displays version information for \osqp{}
+    \end{itemize}
+\end{itemize}
+
+\subsubsection*{Bugs Fixed}
+\begin{itemize}
+\item Starting point supplied to \code{solve()} via \code{opt.x0} is no longer ignored for nonlinear equations.
 \end{itemize}
 
 % \subsubsection*{Other Changes}
@@ -3280,6 +3627,10 @@ doi:~\href{https://doi.org/10.1007/0-387-30065-1_4}{10.1007/0-387-30065-1\_4}
 \bibitem{otug}
 \emph{Optimization Toolbox Users's Guide}, The MathWorks, Inc., 2016.
   [Online]. Available: \url{https://www.mathworks.com/help/releases/R2016b/pdf_doc/optim/optim_tb.pdf}.
+
+\bibitem{osqp}
+B.~Stellato, G.~Banjac, P.~Goulart, A.~Bemporad, and S.~Boyd, S., ``{OSQP}: An Operator Splitting Solver for Quadratic Programs'', \emph{Mathematical Programming Computation}, 2020.
+doi:~\href{https://doi.org/10.1007/s12532-020-00179-2}{10.1007/s12532-020-00179-2}
 
 \end{thebibliography}
 

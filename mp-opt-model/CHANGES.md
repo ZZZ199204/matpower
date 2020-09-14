@@ -2,6 +2,36 @@ Change history for MP-Opt-Model
 ===============================
 
 
+since last release
+------------------
+
+#### 9/11/20
+  - Add `get_soln()` method to `opt_model` for extracting solved
+    results for a given named set of variables, constraints or costs.
+  - Add `parse_soln()` method which returns a struct with a complete
+    set of solution vector and shadow price values for a solved model.
+
+#### 9/10/20
+  - Add caching of problem_type() return value.
+
+#### 9/1/20
+  - Add support for OSQP solver from [https://osqp.org][7], including
+    functions `qps_osqp()`, `osqpver()`, and `osqp_options()`.
+
+#### 8/31/20
+  - Save the results of `solve()` method to the `soln` field of the
+    MP-Opt-Model object.
+
+#### 8/28/20
+  - Add `eval_lin_constraint()` method to evaluate the constraint
+    values for the full set or an individual named subset of linear
+    constraints.
+
+#### 8/27/20
+  - Starting point supplied to `solve()` via `opt.x0` is no longer
+    ignored for nonlinear equations.
+
+
 Version 2.0 - *Aug 25, 2020*
 ---------------------------
 
@@ -216,3 +246,4 @@ Version 0.7.0 - *Jun 20, 2019*
 [4]: https://github.com/MATPOWER/matpower/pull/70
 [5]: https://github.com/MATPOWER/matpower/issues/79
 [6]: https://github.com/MATPOWER/matpower/issues/90
+[7]: https://osqp.org
